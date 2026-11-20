@@ -1,12 +1,7 @@
 package page.frsetup.nethunter
 
-import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
 import android.widget.Button
@@ -15,17 +10,17 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import java.net.HttpURLConnection
-import java.net.Inet4Address
-import java.net.URL
 import kotlin.concurrent.thread
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var outputView: TextView
+    private lateinit var statusCard: LinearLayout
+    private lateinit var statusText: TextView
+    private lateinit var routerClient: RouterClient
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        routerClient = RouterClient(this)
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -57,99 +52,81 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, 0, 0, 32)
         }
 
-        val testBtn = Button(this).apply {
-            text = "রাউটার ও গেটওয়ে চেক করুন"
+        val actionBtn = Button(this).apply {
+            text = "রাউটার রিড-ব্যাক ও স্ট্যাটাস চেক করুন"
             setBackgroundColor(Color.parseColor("#00BCD4"))
             setTextColor(Color.BLACK)
             setTypeface(null, Typeface.BOLD)
-            setOnClickListener { runGatewayProbe() }
+            setOnClickListener { checkRouterSysTools() }
         }
 
-        outputView = TextView(this).apply {
-            text = "প্রস্তুত। Wi-Fi কানেক্ট করে উপরের বাটনে চাপুন।"
+        statusCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#131E32"))
+            setPadding(32, 32, 32, 32)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 32, 0, 0)
+            }
+        }
+
+        statusText = TextView(this).apply {
+            text = "প্রস্তুত। Wi-Fi-তে কানেক্ট করে উপরের বাটনে চাপুন।"
             textSize = 14f
             setTextColor(Color.parseColor("#E2E8F0"))
-            setPadding(0, 32, 0, 0)
+            setLineSpacing(8f, 1f)
         }
+        statusCard.addView(statusText)
 
         val scroll = ScrollView(this).apply {
-            addView(outputView)
+            addView(statusCard)
         }
 
         root.addView(logo)
         root.addView(title)
         root.addView(subtitle)
-        root.addView(testBtn)
+        root.addView(actionBtn)
         root.addView(scroll)
         setContentView(root)
     }
 
-    @Suppress("DEPRECATION")
-    private fun findWifiNetwork(cm: ConnectivityManager): Network? {
-        for (net in cm.allNetworks) {
-            val caps = cm.getNetworkCapabilities(net)
-            if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
-                return net
-            }
-        }
-        return null
-    }
-
-    private fun detectGateway(cm: ConnectivityManager, wifiNet: Network): String? {
-        val lp = cm.getLinkProperties(wifiNet) ?: return null
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            lp.dhcpServerAddress?.hostAddress?.let { return it }
-        }
-        for (route in lp.routes) {
-            if (route.isDefaultRoute && route.gateway is Inet4Address) {
-                return route.gateway?.hostAddress
-            }
-        }
-        for (la in lp.linkAddresses) {
-            val addr = la.address
-            if (addr is Inet4Address) {
-                val parts = addr.hostAddress?.split(".")
-                if (parts != null && parts.size == 4) {
-                    return "${parts[0]}.${parts[1]}.${parts[2]}.1"
-                }
-            }
-        }
-        return null
-    }
-
-    private fun runGatewayProbe() {
-        outputView.text = "Wi-Fi গেটওয়ে খুঁজছে..."
+    private fun checkRouterSysTools() {
+        statusText.text = "⏳ Wi-Fi নেটওয়ার্ক ও গেটওয়ে খুঁজছে..."
         thread {
-            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-            val wifiNet = findWifiNetwork(cm)
+            val wifiNet = routerClient.findWifiNetwork()
             if (wifiNet == null) {
-                runOnUiThread { outputView.text = "❌ কোনো Wi-Fi নেটওয়ার্ক পাওয়া যায়নি।" }
+                runOnUiThread { statusText.text = "❌ কোনো Wi-Fi নেটওয়ার্ক পাওয়া যায়নি।" }
                 return@thread
             }
-            val gw = detectGateway(cm, wifiNet)
+
+            val gw = routerClient.detectGatewayIp(wifiNet)
             if (gw == null) {
-                runOnUiThread { outputView.text = "❌ Gateway IP শনাক্ত করা যায়নি।" }
+                runOnUiThread { statusText.text = "❌ Gateway IP শনাক্ত করা যায়নি।" }
                 return@thread
             }
-            try {
-                val conn = wifiNet.openConnection(URL("http://$gw/")) as HttpURLConnection
-                conn.connectTimeout = 5000
-                conn.readTimeout = 5000
-                conn.instanceFollowRedirects = true
-                val code = conn.responseCode
-                val body = conn.inputStream.bufferedReader().use { it.readText() }
-                val titleMatch = Regex("<title[^>]*>(.*?)</title>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).find(body)
-                val pageTitle = titleMatch?.groupValues?.get(1)?.trim() ?: "N/A"
-                conn.disconnect()
-                runOnUiThread {
-                    outputView.text = "✅ Wi-Fi নেটওয়ার্ক পাওয়া গেছে\n" +
-                        "🌐 Gateway IP: $gw\n" +
-                        "📡 HTTP Status: $code\n" +
-                        "🏷️ রাউটার পেজ: $pageTitle"
-                }
-            } catch (e: Exception) {
-                runOnUiThread {
-                    outputView.text = "🌐 Gateway IP: $gw\n❌ কানেকশন এরর: ${e.message}"
+
+            runOnUiThread { statusText.text = "🌐 Gateway: $gw\n⏳ রাউটার কনফিগারেশন রিড করা হচ্ছে (SysTools)..." }
+
+            val result = routerClient.fetchSysTools(wifiNet, gw)
+            runOnUiThread {
+                result.onSuccess { info ->
+                    val remoteStatus = if (info.remoteWebEn) "✅ চালু (Port: ${info.remoteWebPort})" else "❌ বন্ধ (Port: ${info.remoteWebPort})"
+                    val pwdStatus = if (info.hasLoginPwd) "🔐 সেট করা আছে" else "⚠️ সেট করা নেই (ডিফল্ট)"
+
+                    val report = StringBuilder().apply {
+                        append("━━━━━━ রাউটার রিড-ব্যাক রিপোর্ট ━━━━━━\n\n")
+                        append("🏷️ Gateway IP: $gw\n")
+                        append("🛠️ Remote Management: $remoteStatus\n")
+                        append("🔑 অ্যাডমিন পাসওয়ার্ড: $pwdStatus\n\n")
+                        append("--- Raw JSON Output ---\n")
+                        append(info.rawJson)
+                    }.toString()
+
+                    statusText.text = report
+                }.onFailure { err ->
+                    statusText.text = "🌐 Gateway: $gw\n❌ ত্রুটি: ${err.message}"
                 }
             }
         }
