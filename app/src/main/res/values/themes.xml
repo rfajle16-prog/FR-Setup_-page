@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.FrSetup" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#00BCD4</item>
+        <item name="colorPrimaryVariant">#0097A7</item>
+        <item name="colorOnPrimary">#000000</item>
+        <item name="android:statusBarColor">#0B1220</item>
+    </style>
+</resources>
